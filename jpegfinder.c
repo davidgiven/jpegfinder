@@ -18,13 +18,28 @@
 #include <string.h>
 #include <unistd.h>
 #include <limits.h>
+
+#if defined __linux__
 #include <linux/fs.h>
+#endif
 
 static const char* filename = "broken.avi";
-static const char* jpeg_pattern = "jpegs/%05d.jpg";
+static const char* jpeg_dir = "jpegs";
 static int desired_width = 720;
 static int desired_height = 240;
 static uint64_t start_offset = 0;
+
+static const char FILENAME_PATTERN[] = "%s/%012lx.jpg";
+
+static const uint8_t* data;
+static uint64_t length;
+
+static uint8_t byteat(uint64_t offset)
+{
+    if (offset < length)
+        return data[offset];
+    return 0;
+}
 
 static void error(const char* s, ...)
 {
@@ -59,13 +74,13 @@ static void parse_options(int argc, char* const* argv)
         {
             case -1:  return;
             case 'f': filename = optarg; break;
-            case 'j': jpeg_pattern = optarg; break;
+            case 'j': jpeg_dir = optarg; break;
             case 'w': desired_width = strtoull(optarg, NULL, 0); break;
             case 'h': desired_height = strtoull(optarg, NULL, 0); break;
             case 'o': start_offset = strtoull(optarg, NULL, 0); break;
 
             default:
-                error("syntax: avifixer -f <inputfile> -j <output/%d.jpg> [-w width] [-h height] [-o startoffset]");
+                error("syntax: avifixer -f <inputfile> -j <outputdir> [-w width] [-h height] [-o startoffset]");
         }
     }
 }
@@ -78,50 +93,53 @@ int main(int argc, char* const* argv)
     if (fd == -1)
         error("couldn't open input file: %s", strerror(errno));
 
-    struct stat st;
-    if (ioctl(fd,BLKGETSIZE64, &st.st_size) == -1)
-        fstat(fd, &st);
+    {
+        struct stat st;
+        #if defined __linux__
+            if (ioctl(fd, BLKGETSIZE64, &st.st_size) == -1)
+                fstat(fd, &st);
+        #else
+            fstat(fd, &st);
+        #endif
+        length = st.st_size;
+    }
 
-    printf("scanning 0x%lx byte file: %s\n", st.st_size, filename);
+    printf("scanning 0x%lx byte file: %s\n", length, filename);
 
-    const uint8_t* data = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE|MAP_NORESERVE, fd, 0);
+    data = mmap(NULL, length, PROT_READ, MAP_PRIVATE|MAP_NORESERVE, fd, 0);
     if (data == MAP_FAILED)
         error("couldn't map file");
 
     int count = 0;
     uint64_t lastheader = ULONG_MAX;
     bool sized = false;
-    for (uint64_t offset = start_offset; offset < (st.st_size-2); offset++)
+    for (uint64_t offset = start_offset; offset != length; offset++)
     {
-        if ((data[offset+0] == 0xff) && (data[offset+1] == 0xd8))
+        if ((offset & 0xfffff) == 0)
+            printf("progress: 0x%lx / 0x%lx (%d%%)\n", offset, length, offset*100 / length);
+
+        if ((byteat(offset+0) == 0xff) && (byteat(offset+1) == 0xd8))
         {
-            printf("found header at 0x%lx (%d%%)\n", offset,
-				offset * 100 / st.st_size);
             lastheader = offset;
             sized = false;
         }
 
         if (lastheader != ULONG_MAX)
         {
-            if ((data[offset+0] == 0xff) && (data[offset+1] == 0xc0))
+            if ((byteat(offset+0) == 0xff) && (byteat(offset+1) == 0xc0))
             {
-                int height = (data[offset+5]<<8) | data[offset+6];
-                int width = (data[offset+7]<<8) | data[offset+8];
+                int height = (byteat(offset+5)<<8) | byteat(offset+6);
+                int width = (byteat(offset+7)<<8) | byteat(offset+8);
                 if ((desired_width == 0) || ((width == desired_width) && (height == desired_height)))
                     sized = true;
                 else
-                {
-                    printf("image size of %d x %d does not match, skipping\n", width, height);
                     lastheader = ULONG_MAX;
-                }
             }
 
-            if ((data[offset+0] == 0xff) && (data[offset+1] == 0xd9) && sized)
+            if ((byteat(offset+0) == 0xff) && (byteat(offset+1) == 0xd9) && sized)
             {
-                printf("found footer at 0x%lx\n", offset);
-
-                char* outputfilename = aprintf(jpeg_pattern, count);
-                printf("saving to %s\n", outputfilename);
+                char* outputfilename = aprintf(FILENAME_PATTERN, jpeg_dir, offset);
+                printf("found image: %s\n", outputfilename);
 
                 int outputfd = open(outputfilename, O_CREAT|O_WRONLY, 0666);
                 if (outputfd == -1)
