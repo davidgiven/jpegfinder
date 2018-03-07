@@ -1,7 +1,6 @@
 /* © 2018 David Given
- * This program is distributable under the terms of the 2-clause BSD license. See:
- * https://opensource.org/licenses/BSD-2-Clause
- * ...for the full text.
+ * This program is distributable under the terms of the 2-clause BSD license.
+ * See the LICENSE file in this directory for the full text.
  */
 
 #include <stdlib.h>
@@ -25,11 +24,11 @@
 
 static const char* filename = "broken.avi";
 static const char* jpeg_dir = "jpegs";
-static int desired_width = 720;
-static int desired_height = 240;
+static int desired_width = 0;
+static int desired_height = 0;
 static uint64_t start_offset = 0;
 
-static const char FILENAME_PATTERN[] = "%s/%012lx.jpg";
+static const char FILENAME_PATTERN[] = "%s/%016lx.jpg";
 
 static const uint8_t* data;
 static uint64_t length;
